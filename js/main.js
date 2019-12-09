@@ -45,11 +45,23 @@ terminal._log = function(...messages) {
   });
 };
 
+last_time = Date.now();
+
 // Implement own send function to log outcoming data to the terminal.
-const send = (data) => {
+const send = (data, force) => {
+
+  current_time = Date.now();
+
+  if(current_time - last_time < 50 && !force){
+    return;
+  }
+
+  last_time = current_time;
+
   terminal.send(data).
       then(() => logToTerminal(data, 'out')).
       catch((error) => logToTerminal(error));
+
 };
 
 // Bind event listeners to the UI elements.
@@ -119,6 +131,17 @@ create_motorcommand = function(left, right){
 
 }
 
+terminalContainer.addEventListener('touchstart', (e) => {
+
+  is_mouse_down = true;
+  touch = e.touches[0];
+  start_x = touch.screenX;
+  start_y = touch.screenY;
+
+  return;
+
+});
+
 terminalContainer.addEventListener('mousedown', (e) => {
 
   is_mouse_down = true;
@@ -129,12 +152,48 @@ terminalContainer.addEventListener('mousedown', (e) => {
 
 });
 
+
+terminalContainer.addEventListener('touchend', () => {
+
+  is_mouse_down = false;
+
+  motor_command = create_motorcommand(0, 0);
+  send(motor_command, true);
+
+  return;
+
+});
+
 terminalContainer.addEventListener('mouseup', () => {
 
   is_mouse_down = false;
 
   motor_command = create_motorcommand(0, 0);
-  send(motor_command);
+  send(motor_command, true);
+
+  return;
+
+});
+
+terminalContainer.addEventListener('touchmove', (e) => {
+
+  if(is_mouse_down){
+
+    touch = e.touches[0];
+
+    dx = start_x - touch.screenX;
+    dy = start_y - touch.screenY;
+
+    left = Math.round( dy - ( dx / 10 ) );
+    right = Math.round( dy + ( dx / 10 ) );
+
+    motor_command = create_motorcommand(left, right);
+
+    //console.log(motor_command);
+
+    send(motor_command, false);
+
+  }
 
   return;
 
@@ -154,7 +213,7 @@ terminalContainer.addEventListener('mousemove', (e) => {
 
     //console.log(motor_command);
 
-    send(motor_command);
+    send(motor_command, false);
 
   }
 

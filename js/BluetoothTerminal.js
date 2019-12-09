@@ -4,18 +4,20 @@
 class BluetoothTerminal {
   /**
    * Create preconfigured Bluetooth Terminal instance.
-   * @param {!(number|string)} [serviceUuid=0xFFE0] - Service UUID
-   * @param {!(number|string)} [characteristicUuid=0xFFE1] - Characteristic UUID
+   * @param {!(number|string)} [serviceUuid="6e400001-b5a3-f393-e0a9-e50e24dcca9e"] - Service UUID
+   * @param {!(number|string)} [txCharacteristicUuid="6e400003-b5a3-f393-e0a9-e50e24dcca9e"] - TX Characteristic UUID
+   * @param {!(number|string)} [rxCharacteristicUuid="6e400002-b5a3-f393-e0a9-e50e24dcca9e"] - RX Characteristic UUID
    * @param {string} [receiveSeparator='\n'] - Receive separator
    * @param {string} [sendSeparator='\n'] - Send separator
    */
-  constructor(serviceUuid = 0xFFE0, characteristicUuid = 0xFFE1,
-      receiveSeparator = '\n', sendSeparator = '\n') {
+  constructor(serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e", txCharacteristicUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+      rxCharacteristicUuid="6e400003-b5a3-f393-e0a9-e50e24dcca9e", receiveSeparator = '\n', sendSeparator = '\n') {
     // Used private variables.
     this._receiveBuffer = ''; // Buffer containing not separated data.
     this._maxCharacteristicValueLength = 20; // Max characteristic value length.
     this._device = null; // Device object cache.
-    this._characteristic = null; // Characteristic object cache.
+    this._txCharacteristic = null; // Characteristic object cache.
+    this._rxCharacteristic = null; // Characteristic object cache.
 
     // Bound functions used to add and remove appropriate event handlers.
     this._boundHandleDisconnection = this._handleDisconnection.bind(this);
@@ -24,7 +26,8 @@ class BluetoothTerminal {
 
     // Configure with specified parameters.
     this.setServiceUuid(serviceUuid);
-    this.setCharacteristicUuid(characteristicUuid);
+    this.setTXCharacteristicUuid(txCharacteristicUuid);
+    this.setRXCharacteristicUuid(rxCharacteristicUuid);
     this.setReceiveSeparator(receiveSeparator);
     this.setSendSeparator(sendSeparator);
   }
@@ -47,10 +50,10 @@ class BluetoothTerminal {
   }
 
   /**
-   * Set number or string representing characteristic UUID used.
-   * @param {!(number|string)} uuid - Characteristic UUID
+   * Set number or string representing TX characteristic UUID used.
+   * @param {!(number|string)} uuid - TX Characteristic UUID
    */
-  setCharacteristicUuid(uuid) {
+  setTXCharacteristicUuid(uuid) {
     if (!Number.isInteger(uuid) &&
         !(typeof uuid === 'string' || uuid instanceof String)) {
       throw new Error('UUID type is neither a number nor a string');
@@ -60,7 +63,24 @@ class BluetoothTerminal {
       throw new Error('UUID cannot be a null');
     }
 
-    this._characteristicUuid = uuid;
+    this._txCharacteristicUuid = uuid;
+  }
+
+  /**
+   * Set number or string representing RX characteristic UUID used.
+   * @param {!(number|string)} uuid - RX Characteristic UUID
+   */
+  setRXCharacteristicUuid(uuid) {
+    if (!Number.isInteger(uuid) &&
+        !(typeof uuid === 'string' || uuid instanceof String)) {
+      throw new Error('UUID type is neither a number nor a string');
+    }
+
+    if (!uuid) {
+      throw new Error('UUID cannot be a null');
+    }
+
+    this._rxCharacteristicUuid = uuid;
   }
 
   /**
@@ -113,10 +133,13 @@ class BluetoothTerminal {
   disconnect() {
     this._disconnectFromDevice(this._device);
 
-    if (this._characteristic) {
-      this._characteristic.removeEventListener('characteristicvaluechanged',
+    if (this._rxCharacteristic) {
+      this._rxCharacteristic.removeEventListener('characteristicvaluechanged',
           this._boundHandleCharacteristicValueChanged);
-      this._characteristic = null;
+      this._rxCharacteristic = null;
+    }
+    if (this._txCharacteristic){
+      this._txCharacteristic = null;
     }
 
     this._device = null;
@@ -153,24 +176,24 @@ class BluetoothTerminal {
         this._maxCharacteristicValueLength);
 
     // Return rejected promise immediately if there is no connected device.
-    if (!this._characteristic) {
+    if (!this._txCharacteristic) {
       return Promise.reject(new Error('There is no connected device'));
     }
 
     // Write first chunk to the characteristic immediately.
-    let promise = this._writeToCharacteristic(this._characteristic, chunks[0]);
+    let promise = this._writeToCharacteristic(this._txCharacteristic, chunks[0]);
 
     // Iterate over chunks if there are more than one of it.
     for (let i = 1; i < chunks.length; i++) {
       // Chain new promise.
       promise = promise.then(() => new Promise((resolve, reject) => {
         // Reject promise if the device has been disconnected.
-        if (!this._characteristic) {
+        if (!this._txCharacteristic) {
           reject(new Error('Device has been disconnected'));
         }
 
         // Write chunk to the characteristic and resolve the promise.
-        this._writeToCharacteristic(this._characteristic, chunks[i]).
+        this._writeToCharacteristic(this._txCharacteristic, chunks[i]).
             then(resolve).
             catch(reject);
       }));
@@ -263,8 +286,8 @@ class BluetoothTerminal {
    */
   _connectDeviceAndCacheCharacteristic(device) {
     // Check remembered characteristic.
-    if (device.gatt.connected && this._characteristic) {
-      return Promise.resolve(this._characteristic);
+    if (device.gatt.connected && this._rxCharacteristic) {
+      return Promise.resolve(this._rxCharacteristic);
     }
 
     this._log('Connecting to GATT server...');
@@ -274,18 +297,41 @@ class BluetoothTerminal {
           this._log('GATT server connected', 'Getting service...');
 
           return server.getPrimaryService(this._serviceUuid);
+
         }).
         then((service) => {
+
           this._log('Service found', 'Getting characteristic...');
 
-          return service.getCharacteristic(this._characteristicUuid);
+          this._service = service;
+
+          return service.getCharacteristic(this._txCharacteristicUuid);
+
         }).
         then((characteristic) => {
+
           this._log('Characteristic found');
 
-          this._characteristic = characteristic; // Remember characteristic.
+          if(characteristic.uuid == this._txCharacteristicUuid){
+            this._txCharacteristic = characteristic;
+          } else if(characteristic.uuid == this._rxCharacteristicUuid){
+            this._rxCharacteristic = characteristic;
+          }
 
-          return this._characteristic;
+          return this._service.getCharacteristic(this._rxCharacteristicUuid);
+
+        }). then((characteristic) => {
+
+          this._log('Characteristic found');
+
+          if(characteristic.uuid == this._txCharacteristicUuid){
+            this._txCharacteristic = characteristic;
+          } else if(characteristic.uuid == this._rxCharacteristicUuid){
+            this._rxCharacteristic = characteristic;
+          }
+
+          return this._rxCharacteristic;
+
         });
   }
 
